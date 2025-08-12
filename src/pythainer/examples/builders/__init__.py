@@ -7,7 +7,7 @@ environments using Docker, including setups for GUI applications, OpenCL, Vulkan
 projects like CLSPV.
 """
 
-from typing import List
+from typing import Iterable, List
 
 from pythainer.builders import PartialDockerBuilder, UbuntuDockerBuilder
 from pythainer.builders.utils import cmake_build_install
@@ -259,4 +259,158 @@ def clspv_builder() -> PartialDockerBuilder:
         commit="3617a5d662082bf565e54e23956ee63f255ebbbd",
         cleanup=True,
     )
+    return builder
+
+
+def rust_builder(
+    install_rustfmt: bool = True,
+    install_clippy: bool = True,
+    install_cargo_edit: bool = True,
+    install_cargo_watch: bool = False,
+) -> PartialDockerBuilder:
+    """
+    Sets up a Docker builder for Rust development by installing Rust via rustup
+    and optionally adding common development tools.
+
+    Parameters:
+        install_rustfmt (bool): Whether to install the rustfmt formatter.
+        install_clippy (bool): Whether to install the clippy linter.
+        install_cargo_edit (bool): Whether to install cargo-edit (adds `cargo add`, etc.).
+        install_cargo_watch (bool): Whether to install cargo-watch for file change detection.
+
+    Returns:
+        PartialDockerBuilder: Docker builder configured for Rust development.
+    """
+    builder = PartialDockerBuilder()
+    builder.user()
+
+    # Install Rust using rustup (non-interactive)
+    builder.run("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y")
+
+    # Set environment variable to include Rust's cargo bin directory in PATH
+    builder.env(name="PATH", value="/home/${USER_NAME}/.cargo/bin:$PATH")
+
+    # Check Rust version
+    builder.run(command="cargo --version")
+
+    # Add rustfmt if requested
+    if install_rustfmt:
+        builder.run(command="rustup component add rustfmt")
+
+    # Add clippy if requested
+    if install_clippy:
+        builder.run(command="rustup component add clippy")
+
+    # Install cargo-edit if requested
+    if install_cargo_edit:
+        builder.run(command="cargo install cargo-edit")
+
+    # Install cargo-watch if requested
+    if install_cargo_watch:
+        builder.run(command="cargo install cargo-watch")
+
+    return builder
+
+
+def qemu_dependencies() -> List[str]:
+    """
+    Return the list of Ubuntu packages required to build QEMU from source.
+
+    These cover build tools (make, ninja), Python/sphinx for docs, GLib/pixman
+    for QEMU’s build/runtime, and optional GUI/audio backends (SDL2, GTK, ALSA, PulseAudio).
+
+    Returns:
+        List[str]: Package names to be installed prior to building QEMU.
+    """
+    qemu_packages = [
+        "acpica-tools",
+        "libglib2.0-dev",
+        "libpixman-1-dev",
+        "pkg-config",
+        "python3",
+        "python3-dev",
+        "python3-pip",
+        "python3-sphinx",
+        "python3-sphinx-rtd-theme",
+        "python3-venv",
+        "sparse",
+        "build-essential",
+        "meson",
+        "ninja-build",
+        "pkg-config",
+        "diffutils",
+        "python3",
+        "python3-venv",
+        "libglib2.0-dev",
+        "libusb-1.0-0-dev",
+        "libncursesw5-dev",
+        "libpixman-1-dev",
+        "libepoxy-dev",
+        "libv4l-dev",
+        "libpng-dev",
+        "libsdl2-dev",
+        "libsdl2-image-dev",
+        "libgtk-3-dev",
+        "libgdk-pixbuf2.0-dev",
+        "libasound2-dev",
+        "libpulse-dev",
+        "libx11-dev",
+    ]
+
+    return qemu_packages
+
+
+def qemu_builder(
+    version: str = "10.0.2",
+    targets: Iterable[str] = ("aarch64-linux-user", "aarch64-softmmu", "riscv64-softmmu"),
+    cleanup: bool = False,
+) -> PartialDockerBuilder:
+    """
+    Create build steps to download, compile, and install QEMU from source.
+
+    Parameters:
+        version (str):
+            QEMU version to fetch from https://download.qemu.org (e.g., "10.0.2").
+        targets (Iterable[str]):
+            QEMU target list passed to `--target-list` during configure.
+            Examples include "aarch64-linux-user", "aarch64-softmmu", "riscv64-softmmu".
+        cleanup (bool):
+            If True, remove the extracted source directory after installation.
+
+    Returns:
+        PartialDockerBuilder: A builder that, when composed/applied, installs QEMU in the image.
+    """
+    stemname = f"qemu-{version}"
+    tarname = f"{stemname}.tar.xz"
+    download_url = f"https://download.qemu.org/{tarname}"
+
+    builder = PartialDockerBuilder()
+    builder.run_multiple(
+        commands=[
+            f"wget -q {download_url}",
+            f"tar -xf {tarname}",
+            f"rm {tarname}",
+        ]
+    )
+
+    builder.workdir(path=stemname)
+
+    target_list = ",".join(targets)
+    commands = [
+        f'./configure --target-list="{target_list}" --disable-xen --enable-sdl --enable-gtk',
+        "make -j$(nproc)",
+        "sudo make install",
+    ]
+
+    if cleanup:
+        commands.extend(
+            [
+                "cd ..",
+                f"rm -r {stemname}",
+            ]
+        )
+
+    builder.run_multiple(commands=commands)
+    builder.workdir(path="..")
+
     return builder
